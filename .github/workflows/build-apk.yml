@@ -1,0 +1,65 @@
+name: Build Android APK
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check that all program files were uploaded
+        run: |
+          ls -la
+          for f in package.json capacitor.config.json patch_manifest.py www/index.html www/app.js; do
+            if [ ! -f "$f" ]; then echo "::error::الملف $f مش موجود في الـ Repository"; exit 1; fi
+          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm install
+      - run: npx cap add android
+      - name: Patch Android project (camera, open .accdata files, minSdk)
+        run: |
+          python3 patch_manifest.py
+          sed -i 's/minSdkVersion = [0-9]*/minSdkVersion = 23/' android/variables.gradle
+      - name: Generate the app icon from assets/icon-only.png
+        continue-on-error: true
+        run: npx --yes @capacitor/assets generate --android --iconBackgroundColor '#ffffff' --iconBackgroundColorDark '#ffffff'
+      - name: Use the saved signing key (so new versions install over the old app)
+        run: |
+          mkdir -p ~/.android
+          if [ -f debug.keystore ]; then cp debug.keystore ~/.android/debug.keystore; echo "using saved keystore"; else echo "no saved keystore yet (first build)"; fi
+      - run: npx cap sync android
+      - run: |
+          chmod +x android/gradlew
+          cd android && ./gradlew assembleDebug
+      - run: cp ~/.android/debug.keystore ./debug.keystore.out || true
+      - name: Name the APK with the version number
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then VER="${GITHUB_REF_NAME#v}"; else VER="$(node -p "require('./package.json').version")"; fi
+          cp android/app/build/outputs/apk/debug/app-debug.apk "Accounting-Android-${VER}.apk"
+          echo "APK_NAME=Accounting-Android-${VER}.apk" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Accounting-Reader-APK
+          path: ${{ env.APK_NAME }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SAVE-THIS-signing-key
+          path: debug.keystore.out
+          if-no-files-found: ignore
+      - name: Publish a GitHub Release (only when pushing a version tag like v1.1.1)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.APK_NAME }}
+          name: الإصدار ${{ github.ref_name }}
+          body: تحديث تطبيق الموبايل — نزّل ملف الـ APK المرفق وثبّته فوق النسخة القديمة.
