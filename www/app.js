@@ -1529,7 +1529,7 @@ const pr=await LN.requestPermissions();if(pr.display!=='granted')return;const pd
 function mobNotifTog(){if(!(window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform())){toast('الإشعارات بتشتغل بس في نسخة APK المثبتة على الموبايل، مش في المتصفح');return}const on=localStorage.getItem('acc_mob_notif')!=='0';localStorage.setItem('acc_mob_notif',on?'0':'1');toast(on?'اتقفلت التنبيهات':'اتفعّلت التنبيهات');mobNotif();mobDraw('home')}
 /* ===== تحديث تطبيق الموبايل تلقائياً من GitHub Releases ===== */
 const APP_UPDATE_REPO='faragelhagry-cmd/android-app';
-const APP_VERSION='1.1.0';
+const APP_VERSION='1.1.1';
 function verGt(a,b){const pa=String(a).replace(/^v/i,'').split('.').map(Number),pb=String(b).replace(/^v/i,'').split('.').map(Number);for(let i=0;i<Math.max(pa.length,pb.length);i++){const x=pa[i]||0,y=pb[i]||0;if(x>y)return true;if(x<y)return false}return false}
 var APP_UPDATE_INFO=null;
 async function mobCheckUpdate(force){if(!(window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform()))return;if(!force){const last=+localStorage.getItem('acc_upd_t')||0;if(Date.now()-last<12*3600*1000)return}
