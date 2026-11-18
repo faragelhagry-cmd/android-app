@@ -5,6 +5,10 @@ s = open(p, encoding='utf-8').read()
 if 'android.permission.CAMERA' not in s:
     s = s.replace('<application', '<uses-permission android:name="android.permission.CAMERA" />\n    <application', 1)
 
+# السماح ببدء مُثبّت أندرويد عند تنزيل تحديث APK من داخل التطبيق
+if 'android.permission.REQUEST_INSTALL_PACKAGES' not in s:
+    s = s.replace('<application', '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n    <application', 1)
+
 flt = '''
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
