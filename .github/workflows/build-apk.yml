@@ -140,6 +140,72 @@ jobs:
 
       - run: npx cap sync android
 
+      - name: Configure Gradle to use the saved debug keystore
+        shell: bash
+        run: |
+          python3 <<'PYCODE'
+          from pathlib import Path
+          import re
+
+          p = Path("android/app/build.gradle")
+          s = p.read_text(encoding="utf-8")
+
+          # Explicitly configure the debug signing identity to use the restored
+          # keystore. This prevents Gradle from silently signing with another key.
+          signing_block = """signingConfigs {
+                  debug {
+                      storeFile file(System.getProperty("user.home") + "/.android/debug.keystore")
+                      storePassword "android"
+                      keyAlias "androiddebugkey"
+                      keyPassword "android"
+                  }
+              }
+          """
+
+          if not re.search(r"\bsigningConfigs\s*\{", s):
+              s, n = re.subn(r"\bandroid\s*\{", lambda m: m.group(0) + "\n    " + signing_block, s, count=1)
+              if n != 1:
+                  raise SystemExit("Could not locate android { block in app/build.gradle")
+          else:
+              # If a signingConfigs block already exists, ensure its debug entry
+              # points to the restored keystore instead of leaving it unchanged.
+              debug_signing = re.compile(r"debug\s*\{[^{}]*\}", re.S)
+              match = debug_signing.search(s[s.find("signingConfigs"):])
+              if match:
+                  start = s.find("signingConfigs") + match.start()
+                  end = s.find("signingConfigs") + match.end()
+                  s = s[:start] + signing_block.strip() + s[end:]
+              else:
+                  s = re.sub(r"(signingConfigs\s*\{)", r"\1\n    " + signing_block, s, count=1)
+
+          # Ensure the debug build type actually selects signingConfigs.debug.
+          build_types = re.search(r"\bbuildTypes\s*\{", s)
+          if not build_types:
+              raise SystemExit("Could not locate buildTypes { block in app/build.gradle")
+          tail = s[build_types.end():]
+          debug_block = re.search(r"\bdebug\s*\{", tail)
+          if debug_block:
+              absolute = build_types.end() + debug_block.end()
+              close = s.find("}", absolute)
+              if close < 0:
+                  raise SystemExit("Could not locate closing brace for debug build type")
+              body = s[absolute:close]
+              if re.search(r"signingConfig\s+signingConfigs\.debug", body):
+                  pass
+              elif re.search(r"signingConfig\s+", body):
+                  body = re.sub(r"signingConfig\s+[^\s]+", "signingConfig signingConfigs.debug", body, count=1)
+                  s = s[:absolute] + body + s[close:]
+              else:
+                  s = s[:absolute] + "\n            signingConfig signingConfigs.debug\n        " + s[absolute:]
+          else:
+              # Add a dedicated debug build type if the template has none.
+              insert_at = build_types.end()
+              s = s[:insert_at] + "\n        debug { signingConfig signingConfigs.debug }\n" + s[insert_at:]
+
+          p.write_text(s, encoding="utf-8")
+          print("Gradle debug signing configured to use ~/.android/debug.keystore")
+          PYCODE
+
       - name: Build APK
         run: |
           chmod +x android/gradlew
