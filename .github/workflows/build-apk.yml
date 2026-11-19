@@ -12,7 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check required project files
         run: |
@@ -23,11 +23,11 @@ jobs:
             fi
           done
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -140,8 +140,60 @@ jobs:
 
       - run: npx cap sync android
 
-      # Gradle automatically signs debug builds with ~/.android/debug.keystore.
-      # The saved keystore is restored above before Gradle starts.
+      - name: Explicitly configure the saved keystore for debug APK signing
+        shell: bash
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import re
+
+          p = Path("android/app/build.gradle")
+          s = p.read_text(encoding="utf-8")
+
+          # Add a dedicated signing config inside the existing android block.
+          if "savedDebug" not in s:
+              m = re.search(r"(?m)^android\s*\{", s)
+              if not m:
+                  raise SystemExit("Could not find android { block in android/app/build.gradle")
+              insert_at = m.end()
+              signing = """
+              signingConfigs {
+                  savedDebug {
+                      storeFile new File(System.getProperty("user.home"), ".android/debug.keystore")
+                      storePassword "android"
+                      keyAlias "androiddebugkey"
+                      keyPassword "android"
+                  }
+              }
+          """
+              s = s[:insert_at] + signing + s[insert_at:]
+
+              # Explicitly attach that signing config to the debug build type.
+              bm = re.search(r"(?m)^\s*buildTypes\s*\{", s)
+              if not bm:
+                  raise SystemExit("Could not find buildTypes { block in android/app/build.gradle")
+              bstart = bm.end()
+              debug_block = """
+                  debug {
+                      signingConfig signingConfigs.savedDebug
+                  }
+              """
+              s = s[:bstart] + debug_block + s[bstart:]
+              p.write_text(s, encoding="utf-8")
+              print("Configured debug APK to use the saved keystore explicitly.")
+          else:
+              print("savedDebug signing config already present.")
+          PYCODE
+          test -s "$HOME/.android/debug.keystore"
+
+      - name: Confirm signing config was applied
+        shell: bash
+        run: |
+          grep -q "signingConfig signingConfigs.savedDebug" android/app/build.gradle \
+            || { echo "::error::savedDebug signing config was NOT applied to build.gradle"; cat android/app/build.gradle; exit 1; }
+          chmod +x android/gradlew
+          cd android
+          ./gradlew :app:signingReport --no-daemon | grep -E "Variant: debug$|Config:|Store:|SHA-256:" | head -12
 
       - name: Build APK
         run: |
@@ -150,6 +202,7 @@ jobs:
           ./gradlew assembleDebug
 
       - name: Verify APK signature and print certificate fingerprint
+        shell: bash
         run: |
           APK=android/app/build/outputs/apk/debug/app-debug.apk
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
@@ -157,13 +210,25 @@ jobs:
             echo "::error::apksigner was not found"
             exit 1
           fi
-          SIGNATURE_INFO="$("$APKSIGNER" verify --verbose --print-certs "$APK")"
+          SIGNATURE_INFO="$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1)" || {
+            printf '%s\n' "$SIGNATURE_INFO"; echo "::error::apksigner verify failed"; exit 1; }
           printf '%s\n' "$SIGNATURE_INFO" | tee apk-signature.txt
-          APK_SHA256="$(printf '%s\n' "$SIGNATURE_INFO" | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{gsub(":", "", $2); print tolower($2); exit}')"
-          if [[ -z "$APK_SHA256" || "$APK_SHA256" != "$KEYSTORE_SHA256" ]]; then
+
+          norm() { tr -d ': \r\n' | tr 'A-F' 'a-f'; }
+          # first "certificate SHA-256 digest" line, whatever the signer label looks like
+          APK_SHA256="$(printf '%s\n' "$SIGNATURE_INFO" | grep -i -m1 'certificate SHA-256 digest' | sed 's/.*digest:[[:space:]]*//' | norm)"
+          SAVED_SHA256="$(printf '%s' "$KEYSTORE_SHA256" | norm)"
+
+          echo "Saved keystore SHA-256: $SAVED_SHA256"
+          echo "APK signer SHA-256:     $APK_SHA256"
+          echo "apksigner used: $APKSIGNER"
+
+          if [[ -z "$APK_SHA256" ]]; then
+            echo "::error::Could not read the certificate digest from apksigner output (see log above)"
+            exit 1
+          fi
+          if [[ "$APK_SHA256" != "$SAVED_SHA256" ]]; then
             echo "::error::APK signer certificate does not match the saved keystore certificate"
-            echo "Saved keystore SHA-256: $KEYSTORE_SHA256"
-            echo "APK signer SHA-256: $APK_SHA256"
             exit 1
           fi
           echo "APK signing certificate matches the saved keystore."
@@ -175,7 +240,7 @@ jobs:
           cp android/app/build/outputs/apk/debug/app-debug.apk "Accounting-Android-${VERSION}.apk"
           echo "APK_NAME=Accounting-Android-${VERSION}.apk" >> "$GITHUB_ENV"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: Accounting-Reader-APK
           path: ${{ env.APK_NAME }}
