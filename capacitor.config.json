@@ -1,6 +1,0 @@
-{
-  "appId": "com.shop.accounting.reader",
-  "appName": "نظام محاسبة معرض الشباسي",
-  "webDir": "www",
-  "server": { "androidScheme": "https" }
-}
